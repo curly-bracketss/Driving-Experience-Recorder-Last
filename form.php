@@ -157,33 +157,37 @@ if (session_status() === PHP_SESSION_NONE) {
             }
         });
 
-        // Card data
-        const cardData = [
-            {
-                title: "Road Surface Types",
-                image: "./assets/road.jpeg",
-            },
-            {
-                title: "Weather Conditions",
-                image: "./assets/weather.jpeg",
-            },
-            {
-                title: "Traffic Density",
-                image: "./assets/traffic.jpeg",
-            },
-            {
-                title: "Parking Type",
-                image: "./assets/parking.jpeg",
-            },
-            {
-                title: "Maneuvers Executed",
-                image: "./assets/manouvres.jpeg",
-            },
-            {
-                title: "Visibility Conditions",
-                image: "./assets/visibility.jpeg",
-            },
-        ];
+   const cardData = [
+    {
+        title: "Road Surface Types",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657362/WhatsApp_Image_2025-12-24_at_00.57.32_okdwjf.jpg",
+    },
+    {
+        title: "Weather Conditions",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657363/WhatsApp_Image_2025-12-24_at_00.59.03_nzinzy.jpg",
+    },
+    {
+        title: "Traffic Density",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657363/WhatsApp_Image_2025-12-24_at_00.59.48_aczmwu.jpg",
+    },
+    {
+        title: "Parking Type",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657363/WhatsApp_Image_2025-12-24_at_00.58.15_awhbry.jpg",
+    },
+    {
+        title: "Time of Day",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657363/WhatsApp_Image_2025-12-24_at_01.00.47_zf5l1l.jpg",
+    },
+    {
+        title: "Maneuvers Executed",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657319/WhatsApp_Image_2025-12-24_at_01.12.34_1_lq9qgy.jpg",
+    },
+
+    {
+        title: "Visibility Conditions",
+        image: "https://res.cloudinary.com/dh8tgu591/image/upload/v1766657363/WhatsApp_Image_2025-12-24_at_01.12.34_itgvec.jpg",
+    },
+];
 
         const cardsContainer = document.getElementById("cards");
         const marqueeInner = document.getElementById("marqueeInner");
