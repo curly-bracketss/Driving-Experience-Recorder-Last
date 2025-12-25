@@ -1,4 +1,7 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require __DIR__ . '/db.php';
 
 $message = '';
@@ -8,6 +11,15 @@ function h(?string $value): string
 {
     return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
 }
+
+$sessionIdCol = sessionIdColumn($conn);
+$junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
+    ? 'idSession'
+    : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
+$hasRoadCol = tableHasColumn($conn, 'drivingSession', 'road_id');
+$dayField = tableHasColumn($conn, 'drivingSession', 'partOfDay')
+    ? 'partOfDay'
+    : (tableHasColumn($conn, 'drivingSession', 'idOfDay') ? 'idOfDay' : null);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $csrf = $_POST['csrf_token'] ?? '';
@@ -33,6 +45,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$date || !$start_time || !$end_time || $mileage === '' || !$weather_id || !$traffic_id || empty($road_ids) || !$partOfDay || !$visibility_id || !$parking_id || !$manoeuvre_id) {
         $errors[] = 'Please complete all fields.';
+    }
+    if (!$dayField) {
+        $errors[] = 'Database is missing part of day column.';
     }
 
     $dtDate = DateTime::createFromFormat('Y-m-d', $date);
@@ -80,10 +95,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (empty($errors)) {
+        $experience = DrivingExperience::fromForm(
+            [
+                'date' => $date,
+                'start_time' => $start_time,
+                'end_time' => $end_time,
+                'mileage' => $mileage,
+                'weather_id' => $weather_id,
+                'traffic_id' => $traffic_id,
+                'partOfDay' => $partOfDay,
+                'visibility_id' => $visibility_id,
+                'parking_id' => $parking_id,
+                'manoeuvre_id' => $manoeuvre_id,
+            ],
+            $road_ids
+        );
+
         try {
             $conn->begin_transaction();
             $nextId = null;
-            $resId = $conn->query('SELECT COALESCE(MAX(idSession), 0) + 1 AS nextId FROM drivingSession FOR UPDATE');
+            $resId = $conn->query("SELECT COALESCE(MAX({$sessionIdCol}), 0) + 1 AS nextId FROM drivingSession FOR UPDATE");
             if ($resId) {
                 $row = $resId->fetch_assoc();
                 $nextId = (int) $row['nextId'];
@@ -92,44 +123,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$nextId) {
                 throw new Exception('Failed to compute next session id.');
             }
+            $experience->id = $nextId;
 
-            $sql = 'INSERT INTO drivingSession (idSession, date, partOfDay, start_time, end_time, mileage, weather_id, traffic_id, visibility_id, parking_id, manoeuvre_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+            $columns = [$sessionIdCol, 'date', $dayField, 'start_time', 'end_time', 'mileage', 'weather_id', 'traffic_id', 'visibility_id', 'parking_id', 'manoeuvre_id'];
+            $placeholders = array_fill(0, count($columns), '?');
+            $types = 'issssdiiiii';
+            $values = [
+                $experience->id,
+                $experience->date,
+                $experience->partOfDay,
+                $experience->startTime,
+                $experience->endTime,
+                $experience->mileage,
+                $experience->weatherId,
+                $experience->trafficId,
+                $experience->visibilityId,
+                $experience->parkingId,
+                $experience->manoeuvreId,
+            ];
+
+            if ($hasRoadCol) {
+                $columns[] = 'road_id';
+                $placeholders[] = '?';
+                $types .= 'i';
+                $values[] = (int) ($experience->roadIds[0] ?? 0);
+            }
+
+            $sql = 'INSERT INTO drivingSession (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $placeholders) . ')';
             $stmt = $conn->prepare($sql);
             if (!$stmt) {
                 throw new Exception('Prepare failed for drivingSession insert: ' . $conn->error);
             }
 
-            $stmt->bind_param(
-                'issssdiiiii',
-                $nextId,
-                $date,
-                $partOfDay,
-                $start_time,
-                $end_time,
-                $mileage,
-                $weather_id,
-                $traffic_id,
-                $visibility_id,
-                $parking_id,
-                $manoeuvre_id
-            );
+            $stmt->bind_param($types, ...$values);
 
             $stmt->execute();
             $stmt->close();
 
-            $sql2 = 'INSERT IGNORE INTO drivingSession_roadSurfaceType (idSession, road_id) VALUES (?, ?)';
-            $stmt2 = $conn->prepare($sql2);
-            if (!$stmt2) {
-                throw new Exception('Prepare failed for drivingSession_roadSurfaceType insert: ' . $conn->error);
-            }
+            if ($junctionCol) {
+                $sql2 = "INSERT IGNORE INTO drivingSession_roadSurfaceType ({$junctionCol}, road_id) VALUES (?, ?)";
+                $stmt2 = $conn->prepare($sql2);
+                if (!$stmt2) {
+                    throw new Exception('Prepare failed for drivingSession_roadSurfaceType insert: ' . $conn->error);
+                }
 
-            foreach ($road_ids as $rid) {
-                $ridInt = (int)$rid;
-                $stmt2->bind_param('ii', $nextId, $ridInt);
-                $stmt2->execute();
+                foreach ($experience->roadIds as $rid) {
+                    $ridInt = (int)$rid;
+                    $stmt2->bind_param('ii', $experience->id, $ridInt);
+                    $stmt2->execute();
+                }
+                $stmt2->close();
             }
-            $stmt2->close();
 
             $conn->commit();
 
@@ -193,7 +237,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <ul class="hidden lg:flex  xl:text-base 2xl:text-xl chivo-regular h-full text-main-green">
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
-                        <a href="form.html" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
+                        <a href="form.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
                     </li>
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
                         <a href="record.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Record</a>
@@ -211,7 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div id="mobile-menu" class="mobile-menu lg:hidden pb-3">
                 <ul class="flex flex-col text-sm sm:text-base chivo-regular text-main-green space-y-1">
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
-                        <a href="form.html" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
+                        <a href="form.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
                     </li>
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
                         <a href="record.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Record Experience</a>

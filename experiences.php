@@ -1,4 +1,7 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require __DIR__ . '/db.php';
 
 $message = isset($_GET['message']) ? $_GET['message'] : '';
@@ -21,33 +24,35 @@ function h(?string $value): string
     return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
 }
 
+$sessionIdCol = sessionIdColumn($conn);
+$junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
+    ? 'idSession'
+    : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
+$hasRoadCol = tableHasColumn($conn, 'drivingSession', 'road_id');
+$dayField = tableHasColumn($conn, 'drivingSession', 'partOfDay')
+    ? 'partOfDay'
+    : (tableHasColumn($conn, 'drivingSession', 'idOfDay') ? 'idOfDay' : null);
+
 if (isset($_GET['delete'])) {
     $deleteToken = (string)$_GET['delete'];
     $deleteId = token_to_id('session', $deleteToken);
     if ($deleteId === null) {
         $errors[] = 'Invalid session token.';
     } else {
-    $hasRoadCol = tableHasColumn($conn, 'drivingSession', 'road_id');
-    $sessionIdCol = sessionIdColumn($conn);
-    $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
-        ? 'idSession'
-        : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
-    $conn->begin_transaction();
-    if (!$hasRoadCol) {
-        if ($junctionCol) {
+        $conn->begin_transaction();
+        if (!$hasRoadCol && $junctionCol) {
             $stmtJ = $conn->prepare("DELETE FROM drivingSession_roadSurfaceType WHERE {$junctionCol} = ?");
             $stmtJ->bind_param('i', $deleteId);
             $stmtJ->execute();
             $stmtJ->close();
         }
-    }
 
-    $stmt = $conn->prepare("DELETE FROM drivingSession WHERE {$sessionIdCol} = ?");
-    $stmt->bind_param('i', $deleteId);
-    $stmt->execute();
-    $stmt->close();
-    $conn->commit();
-    $message = 'Session deleted.';
+        $stmt = $conn->prepare("DELETE FROM drivingSession WHERE {$sessionIdCol} = ?");
+        $stmt->bind_param('i', $deleteId);
+        $stmt->execute();
+        $stmt->close();
+        $conn->commit();
+        $message = 'Session deleted.';
     }
 }
 
@@ -74,11 +79,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update'])) {
     $visibility_id = $_POST['visibility_id'] ?? '';
     $parking_id    = $_POST['parking_id'] ?? '';
     $manoeuvre_id  = $_POST['manoeuvre_id'] ?? '';
-
-    $hasPartOfDay = tableHasColumn($conn, 'drivingSession', 'partOfDay');
-    $hasIdOfDay   = tableHasColumn($conn, 'drivingSession', 'idOfDay');
-    $hasRoadCol   = tableHasColumn($conn, 'drivingSession', 'road_id');
-    $dayField     = $hasPartOfDay ? 'partOfDay' : ($hasIdOfDay ? 'idOfDay' : null);
 
     if (!$id || !$date || !$start_time || !$end_time || !$mileage || !$weather_id || !$traffic_id || empty($road_ids) || !$idOfDay || !$visibility_id || !$parking_id || !$manoeuvre_id) {
         $errors[] = 'Please complete all fields.';
@@ -130,23 +130,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update'])) {
     }
 
     if (empty($errors)) {
+        $experience = DrivingExperience::fromForm(
+            [
+                'id' => $id,
+                'date' => $date,
+                'start_time' => $start_time,
+                'end_time' => $end_time,
+                'mileage' => $mileage,
+                'weather_id' => $weather_id,
+                'traffic_id' => $traffic_id,
+                'idOfDay' => $idOfDay,
+                'visibility_id' => $visibility_id,
+                'parking_id' => $parking_id,
+                'manoeuvre_id' => $manoeuvre_id,
+            ],
+            $road_ids
+        );
+
         try {
             $conn->begin_transaction();
-            $sessionIdCol = sessionIdColumn($conn);
-            $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
-                ? 'idSession'
-                : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
-
-            $cols = ['date = ?', 'start_time = ?', 'end_time = ?', 'mileage = ?', 'weather_id = ?', 'traffic_id = ?', 'visibility_id = ?', 'parking_id = ?', 'manoeuvre_id = ?'];
+            $cols = ['date = ?', 'start_time = ?', 'end_time = ?', 'mileage = ?', 'weather_id = ?', 'traffic_id = ?', 'visibility_id = ?', 'parking_id = ?', 'manoeuvre_id = ?', "{$dayField} = ?"];
             $types = 'sssdiiiii';
-            $params = [$date, $start_time, $end_time, $mileage, $weather_id, $traffic_id, $visibility_id, $parking_id, $manoeuvre_id];
+            $params = [
+                $experience->date,
+                $experience->startTime,
+                $experience->endTime,
+                $experience->mileage,
+                $experience->weatherId,
+                $experience->trafficId,
+                $experience->visibilityId,
+                $experience->parkingId,
+                $experience->manoeuvreId,
+                $experience->partOfDay,
+            ];
 
-            $cols[] = "{$dayField} = ?";
-            $types .= 's';
-            $params[] = $idOfDay;
+            if ($hasRoadCol) {
+                $cols[] = 'road_id = ?';
+                $types .= 'i';
+                $params[] = (int) ($experience->roadIds[0] ?? 0);
+            }
 
             $types .= 'i';
-            $params[] = $id;
+            $params[] = $experience->id;
 
             $sql = 'UPDATE drivingSession SET ' . implode(', ', $cols) . " WHERE {$sessionIdCol} = ?";
             $stmt = $conn->prepare($sql);
@@ -156,14 +181,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update'])) {
 
             if ($junctionCol) {
                 $stmtDel = $conn->prepare("DELETE FROM drivingSession_roadSurfaceType WHERE {$junctionCol} = ?");
-                $stmtDel->bind_param('i', $id);
+                $stmtDel->bind_param('i', $experience->id);
                 $stmtDel->execute();
                 $stmtDel->close();
 
                 $stmtRoad = $conn->prepare("INSERT INTO drivingSession_roadSurfaceType ({$junctionCol}, road_id) VALUES (?, ?)");
-                foreach ($road_ids as $rid) {
+                foreach ($experience->roadIds as $rid) {
                     $ridInt = (int) $rid;
-                    $stmtRoad->bind_param('ii', $id, $ridInt);
+                    $stmtRoad->bind_param('ii', $experience->id, $ridInt);
                     $stmtRoad->execute();
                 }
                 $stmtRoad->close();
@@ -180,44 +205,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update'])) {
         }
     } else {
         $editingId = $id;
-        $editingSession = [
-            'id' => $id,
-            'date' => $date,
-            'start_time' => $start_time,
-            'end_time' => $end_time,
-            'mileage' => $mileage,
-            'weather_id' => $weather_id,
-            'traffic_id' => $traffic_id,
-            'road_id' => $road_id,
-            'idOfDay' => $idOfDay,
-            'visibility_id' => $visibility_id,
-            'parking_id' => $parking_id,
-            'manoeuvre_id' => $manoeuvre_id,
-        ];
+        $editingSession = DrivingExperience::fromForm(
+            [
+                'id' => $id ?? 0,
+                'date' => $date,
+                'start_time' => $start_time,
+                'end_time' => $end_time,
+                'mileage' => $mileage,
+                'weather_id' => $weather_id,
+                'traffic_id' => $traffic_id,
+                'idOfDay' => $idOfDay,
+                'visibility_id' => $visibility_id,
+                'parking_id' => $parking_id,
+                'manoeuvre_id' => $manoeuvre_id,
+            ],
+            $road_ids
+        );
     }
 }
 
 $sessions = fetchSessions($conn);
 
-// Map each session id to an array of road_ids
 $sessionRoads = [];
-$junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
-    ? 'idSession'
-    : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
-if ($junctionCol && !empty($sessions)) {
-    $ids = array_unique(array_map(fn($s) => (int)$s['id'], $sessions));
-    $idList = implode(',', $ids);
-    $resRoads = $conn->query("SELECT {$junctionCol} AS sid, road_id FROM drivingSession_roadSurfaceType WHERE {$junctionCol} IN ({$idList}) ORDER BY road_id");
-    if ($resRoads) {
-        while ($row = $resRoads->fetch_assoc()) {
-            $sid = (string)$row['sid'];
-            if (!isset($sessionRoads[$sid])) {
-                $sessionRoads[$sid] = [];
-            }
-            $sessionRoads[$sid][] = $row['road_id'];
-        }
-        $resRoads->free();
-    }
+foreach ($sessions as $session) {
+    $sessionRoads[(string)$session->id] = $session->roadIds;
 }
 ?>
 <!DOCTYPE html>
@@ -282,7 +293,7 @@ if ($junctionCol && !empty($sessions)) {
                 <!-- Desktop menu -->
                 <ul class="hidden lg:flex  xl:text-base 2xl:text-xl chivo-regular h-full text-main-green">
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
-                        <a href="form.html" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
+                        <a href="form.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
                     </li>
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
                         <a href="record.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Record</a>
@@ -300,7 +311,7 @@ if ($junctionCol && !empty($sessions)) {
             <div id="mobile-menu" class="mobile-menu lg:hidden pb-3">
                 <ul class="flex flex-col text-sm sm:text-base chivo-regular text-main-green space-y-1">
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
-                        <a href="form.html" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
+                        <a href="form.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
                     </li>
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
                         <a href="record.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Record Experience</a>
@@ -379,28 +390,28 @@ if ($junctionCol && !empty($sessions)) {
                         <h3 class="text-2xl text-main-green bbh-hegarty-regular mb-4">Editing Session</h3>
                         <form method="POST" class="grid grid-cols-1 md:grid-cols-2 gap-5">
                             <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
-                            <input type="hidden" name="id" value="<?= h(id_to_token('session', (int)$editingSession['id'])) ?>">
+                            <input type="hidden" name="id" value="<?= h(id_to_token('session', (int)$editingSession->id)) ?>">
                             <label class="flex flex-col gap-2 text-main-green chivo-regular">
                                 <span>Date</span>
-                                <input type="date" name="date" value="<?= h($editingSession['date']) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
+                                <input type="date" name="date" value="<?= h($editingSession->date) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                             </label>
                             <label class="flex flex-col gap-2 text-main-green chivo-regular">
                                 <span>Mileage (km)</span>
-                                <input type="number" step="0.1" min="0" name="mileage" value="<?= h($editingSession['mileage']) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
+                                <input type="number" step="0.1" min="0" name="mileage" value="<?= h($editingSession->mileage) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                             </label>
                             <label class="flex flex-col gap-2 text-main-green chivo-regular">
                                 <span>Start Time</span>
-                                <input type="time" name="start_time" value="<?= h($editingSession['start_time']) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
+                                <input type="time" name="start_time" value="<?= h($editingSession->startTime) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                             </label>
                             <label class="flex flex-col gap-2 text-main-green chivo-regular">
                                 <span>End Time</span>
-                                <input type="time" name="end_time" value="<?= h($editingSession['end_time']) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
+                                <input type="time" name="end_time" value="<?= h($editingSession->endTime) ?>" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                             </label>
                             <label class="flex flex-col gap-2 text-main-green chivo-regular">
                                 <span>Weather</span>
                                 <select name="weather_id" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                                     <?php foreach ($weatherOptions as $key => $label): ?>
-                                        <option value="<?= $key ?>" <?= ($editingSession['weather_id'] == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
+                                        <option value="<?= $key ?>" <?= ($editingSession->weatherId == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </label>
@@ -408,16 +419,12 @@ if ($junctionCol && !empty($sessions)) {
                                 <span>Traffic</span>
                                 <select name="traffic_id" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                                     <?php foreach ($trafficOptions as $key => $label): ?>
-                                        <option value="<?= $key ?>" <?= ($editingSession['traffic_id'] == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
+                                        <option value="<?= $key ?>" <?= ($editingSession->trafficId == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </label>
                     <?php
-                        $selectedRoads = [];
-                        if ($editingSession) {
-                            $sid = (string)$editingSession['id'];
-                            $selectedRoads = array_map('strval', $sessionRoads[$sid] ?? []);
-                        }
+                        $selectedRoads = $editingSession ? array_map('strval', $editingSession->roadIds) : [];
                     ?>
                     <fieldset class="flex flex-col gap-2 text-main-green chivo-regular md:col-span-2">
                         <span>Road Surface (choose all that apply)</span>
@@ -435,7 +442,7 @@ if ($junctionCol && !empty($sessions)) {
                                 <span>Visibility</span>
                                 <select name="visibility_id" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                                     <?php foreach ($visibilityOptions as $key => $label): ?>
-                                        <option value="<?= $key ?>" <?= ($editingSession['visibility_id'] == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
+                                        <option value="<?= $key ?>" <?= ($editingSession->visibilityId == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </label>
@@ -443,7 +450,7 @@ if ($junctionCol && !empty($sessions)) {
                                 <span>Parking</span>
                                 <select name="parking_id" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                                     <?php foreach ($parkingOptions as $key => $label): ?>
-                                        <option value="<?= $key ?>" <?= ($editingSession['parking_id'] == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
+                                        <option value="<?= $key ?>" <?= ($editingSession->parkingId == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </label>
@@ -451,7 +458,7 @@ if ($junctionCol && !empty($sessions)) {
                                 <span>Manoeuvre</span>
                                 <select name="manoeuvre_id" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                                     <?php foreach ($manoeuvreOptions as $key => $label): ?>
-                                        <option value="<?= $key ?>" <?= ($editingSession['manoeuvre_id'] == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
+                                        <option value="<?= $key ?>" <?= ($editingSession->manoeuvreId == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </label>
@@ -459,7 +466,7 @@ if ($junctionCol && !empty($sessions)) {
                                 <span>Part of Day</span>
                                 <select name="idOfDay" required class="rounded-xl border border-main-green/30 focus:border-main-green focus:ring-main-green bg-white p-3">
                                     <?php foreach ($dayParts as $key => $label): ?>
-                                        <option value="<?= $key ?>" <?= ($editingSession['idOfDay'] == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
+                                        <option value="<?= $key ?>" <?= ($editingSession->partOfDay == $key) ? 'selected' : '' ?>><?= h($label) ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </label>
@@ -493,24 +500,24 @@ if ($junctionCol && !empty($sessions)) {
                                 </tr>
                             <?php endif; ?>
                             <?php foreach ($sessions as $session): ?>
-                                <tr class="odd:bg-white even:bg-hover-green/60" data-weather="<?= h($session['weather_id']) ?>" data-traffic="<?= h($session['traffic_id']) ?>" data-day="<?= h($session['idOfDay']) ?>">
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session['date']) ?></td>
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session['start_time']) ?></td>
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session['end_time']) ?></td>
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session['mileage']) ?> km</td>
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($weatherOptions[$session['weather_id']] ?? '—') ?></td>
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($trafficOptions[$session['traffic_id']] ?? '—') ?></td>
+                                <tr class="odd:bg-white even:bg-hover-green/60" data-weather="<?= h((string)$session->weatherId) ?>" data-traffic="<?= h((string)$session->trafficId) ?>" data-day="<?= h($session->partOfDay) ?>">
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session->date) ?></td>
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session->startTime) ?></td>
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session->endTime) ?></td>
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($session->mileage) ?> km</td>
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($weatherOptions[$session->weatherId] ?? '—') ?></td>
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($trafficOptions[$session->trafficId] ?? '—') ?></td>
                             <td class="py-3 px-4 text-main-green chivo-regular">
                                 <?php
-                                    $sid = (string)$session['id'];
+                                    $sid = (string)$session->id;
                                     $roads = $sessionRoads[$sid] ?? [];
                                     $labels = array_map(fn($rid) => $roadOptions[$rid] ?? '—', $roads);
                                     echo h($labels ? implode(', ', $labels) : '—');
                         ?>
                     </td>
-                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($dayParts[$session['idOfDay']] ?? '—') ?></td>
+                            <td class="py-3 px-4 text-main-green chivo-regular"><?= h($dayParts[$session->partOfDay] ?? '—') ?></td>
                             <td class="py-3 px-4 text-main-green chivo-regular">
-                                        <?php $token = id_to_token('session', (int)$session['id']); ?>
+                                        <?php $token = id_to_token('session', (int)$session->id); ?>
                                         <a class="text-main-green underline mr-3" href="experiences.php?edit=<?= h($token) ?>">Edit</a>
                                         <a class="text-red-700 underline" href="experiences.php?delete=<?= h($token) ?>" onclick="return confirm('Delete this session?');">Delete</a>
                             </td>

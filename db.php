@@ -2,13 +2,21 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+if (!isset($_SESSION['anon_map'])) {
+    $_SESSION['anon_map'] = [];
+}
+if (!isset($_SESSION['anon_reverse'])) {
+    $_SESSION['anon_reverse'] = [];
+}
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(16));
 }
 
+require_once __DIR__ . '/src/DrivingExperience.php';
+
 $DB_HOST = 'mysql-nazrin33.alwaysdata.net';
 $DB_USER = 'nazrin33';
-$DB_PASS = '*****';
+$DB_PASS = '******';
 $DB_NAME = 'nazrin33_hw';
 $DB_PORT = 3306;
 
@@ -81,21 +89,23 @@ function genToken(): string
 
 function id_to_token(string $type, int $id): string
 {
-    if (!isset($_SESSION['id_map'][$type])) {
-        $_SESSION['id_map'][$type] = [];
-        $_SESSION['token_to_id'][$type] = [];
+    if (!isset($_SESSION['anon_map'][$type])) {
+        $_SESSION['anon_map'][$type] = [];
     }
-    if (!isset($_SESSION['id_map'][$type][$id])) {
+    if (!isset($_SESSION['anon_reverse'][$type])) {
+        $_SESSION['anon_reverse'][$type] = [];
+    }
+    if (!isset($_SESSION['anon_reverse'][$type][$id])) {
         $token = genToken();
-        $_SESSION['id_map'][$type][$id] = $token;
-        $_SESSION['token_to_id'][$type][$token] = $id;
+        $_SESSION['anon_reverse'][$type][$id] = $token;
+        $_SESSION['anon_map'][$type][$token] = $id;
     }
-    return $_SESSION['id_map'][$type][$id];
+    return $_SESSION['anon_reverse'][$type][$id];
 }
 
 function token_to_id(string $type, string $token): ?int
 {
-    return $_SESSION['token_to_id'][$type][$token] ?? null;
+    return $_SESSION['anon_map'][$type][$token] ?? null;
 }
 
 
@@ -126,92 +136,79 @@ function fetchSessions(mysqli $conn): array
     $hasIdOfDay   = tableHasColumn($conn, 'drivingSession', 'idOfDay');
     $hasRoadCol   = tableHasColumn($conn, 'drivingSession', 'road_id');
 
-    $select = [
-        "{$idCol} AS id",
-        'date',
-        'start_time',
-        'end_time',
-        'mileage',
-        'weather_id',
-        'traffic_id',
-        'visibility_id',
-        'parking_id',
-        'manoeuvre_id',
-    ];
+    $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
+        ? 'idSession'
+        : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
 
-    if ($hasPartOfDay) {
-        $select[] = 'partOfDay AS idOfDay';
-    } elseif ($hasIdOfDay) {
-        $select[] = 'idOfDay';
-    } else {
-        $select[] = "'' AS idOfDay";
-    }
+    $dayExpr = $hasPartOfDay ? 'd.partOfDay' : ($hasIdOfDay ? 'd.idOfDay' : "''");
+    $roadSelect = $hasRoadCol
+        ? 'CAST(d.road_id AS CHAR) AS road_ids'
+        : ($junctionCol ? "GROUP_CONCAT(DISTINCT rst.road_id ORDER BY rst.road_id) AS road_ids" : "'' AS road_ids");
+    $roadJoin = (!$hasRoadCol && $junctionCol) ? "LEFT JOIN drivingSession_roadSurfaceType rst ON rst.{$junctionCol} = d.{$idCol}" : '';
 
-  
-    $select[] = $hasRoadCol ? 'road_id' : 'NULL AS road_id';
+    $sql = "
+        SELECT d.{$idCol} AS id,
+               d.date,
+               d.start_time,
+               d.end_time,
+               d.mileage,
+               d.weather_id,
+               d.traffic_id,
+               d.visibility_id,
+               d.parking_id,
+               d.manoeuvre_id,
+               {$dayExpr} AS idOfDay,
+               {$roadSelect}
+        FROM drivingSession d
+        {$roadJoin}
+        GROUP BY d.{$idCol}, d.date, d.start_time, d.end_time, d.mileage, d.weather_id, d.traffic_id, d.visibility_id, d.parking_id, d.manoeuvre_id, idOfDay" . ($roadJoin ? ', rst.' . $junctionCol : '') . "
+        ORDER BY d.date DESC, d.start_time DESC
+    ";
 
-    $sql = 'SELECT ' . implode(', ', $select) . " FROM drivingSession ORDER BY date DESC, start_time DESC";
     $res = $conn->query($sql);
-    $sessions = $res->fetch_all(MYSQLI_ASSOC);
+    $rows = $res->fetch_all(MYSQLI_ASSOC);
     $res->free();
 
-    if (!$hasRoadCol) {
-        $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
-            ? 'idSession'
-            : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
-        if ($junctionCol) {
-            $roadMap = [];
-            $res2 = $conn->query("SELECT {$junctionCol} AS sid, MIN(road_id) AS road_id FROM drivingSession_roadSurfaceType GROUP BY {$junctionCol}");
-            while ($row = $res2->fetch_assoc()) {
-                $roadMap[(string)$row['sid']] = $row['road_id'];
-            }
-            $res2->free();
-
-            foreach ($sessions as &$session) {
-                $id = (string)$session['id'];
-                if (isset($roadMap[$id])) {
-                    $session['road_id'] = $roadMap[$id];
-                }
-            }
-            unset($session);
-        }
-    }
-
-    return $sessions;
+    return array_map(fn(array $row) => DrivingExperience::fromRow($row), $rows);
 }
 
 
-function findSession(mysqli $conn, int $id): ?array
+function findSession(mysqli $conn, int $id): ?DrivingExperience
 {
     $idCol       = sessionIdColumn($conn);
     $hasPartOfDay = tableHasColumn($conn, 'drivingSession', 'partOfDay');
     $hasIdOfDay   = tableHasColumn($conn, 'drivingSession', 'idOfDay');
     $hasRoadCol   = tableHasColumn($conn, 'drivingSession', 'road_id');
 
-    $select = [
-        "{$idCol} AS id",
-        'date',
-        'start_time',
-        'end_time',
-        'mileage',
-        'weather_id',
-        'traffic_id',
-        'visibility_id',
-        'parking_id',
-        'manoeuvre_id',
-    ];
+    $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
+        ? 'idSession'
+        : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
 
-    if ($hasPartOfDay) {
-        $select[] = 'partOfDay AS idOfDay';
-    } elseif ($hasIdOfDay) {
-        $select[] = 'idOfDay';
-    } else {
-        $select[] = "'' AS idOfDay";
-    }
+    $dayExpr = $hasPartOfDay ? 'd.partOfDay' : ($hasIdOfDay ? 'd.idOfDay' : "''");
+    $roadSelect = $hasRoadCol
+        ? 'CAST(d.road_id AS CHAR) AS road_ids'
+        : ($junctionCol ? "GROUP_CONCAT(DISTINCT rst.road_id ORDER BY rst.road_id) AS road_ids" : "'' AS road_ids");
+    $roadJoin = (!$hasRoadCol && $junctionCol) ? "LEFT JOIN drivingSession_roadSurfaceType rst ON rst.{$junctionCol} = d.{$idCol}" : '';
 
-    $select[] = $hasRoadCol ? 'road_id' : 'NULL AS road_id';
-
-    $sql = 'SELECT ' . implode(', ', $select) . " FROM drivingSession WHERE {$idCol} = ? LIMIT 1";
+    $sql = "
+        SELECT d.{$idCol} AS id,
+               d.date,
+               d.start_time,
+               d.end_time,
+               d.mileage,
+               d.weather_id,
+               d.traffic_id,
+               d.visibility_id,
+               d.parking_id,
+               d.manoeuvre_id,
+               {$dayExpr} AS idOfDay,
+               {$roadSelect}
+        FROM drivingSession d
+        {$roadJoin}
+        WHERE d.{$idCol} = ?
+        GROUP BY d.{$idCol}, d.date, d.start_time, d.end_time, d.mileage, d.weather_id, d.traffic_id, d.visibility_id, d.parking_id, d.manoeuvre_id, idOfDay" . ($roadJoin ? ', rst.' . $junctionCol : '') . "
+        LIMIT 1
+    ";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param('i', $id);
     $stmt->execute();
@@ -223,22 +220,5 @@ function findSession(mysqli $conn, int $id): ?array
         return null;
     }
 
-    if (!$hasRoadCol) {
-        $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
-            ? 'idSession'
-            : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
-        if ($junctionCol) {
-            $sqlRoad = "SELECT road_id FROM drivingSession_roadSurfaceType WHERE {$junctionCol} = ? ORDER BY road_id ASC LIMIT 1";
-            $stmtRoad = $conn->prepare($sqlRoad);
-            $stmtRoad->bind_param('i', $id);
-            $stmtRoad->execute();
-            $stmtRoad->bind_result($roadId);
-            if ($stmtRoad->fetch()) {
-                $session['road_id'] = $roadId;
-            }
-            $stmtRoad->close();
-        }
-    }
-
-    return $session;
+    return DrivingExperience::fromRow($session);
 }

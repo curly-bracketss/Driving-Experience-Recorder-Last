@@ -1,3 +1,8 @@
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 
@@ -70,7 +75,7 @@
                 <!-- Desktop menu -->
                 <ul class="hidden lg:flex  xl:text-base 2xl:text-xl chivo-regular h-full text-main-green">
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
-                        <a href="form.html" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
+                        <a href="form.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
                     </li>
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
                         <a href="record.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Record</a>
@@ -88,7 +93,7 @@
             <div id="mobile-menu" class="mobile-menu lg:hidden pb-3">
                 <ul class="flex flex-col text-sm sm:text-base chivo-regular text-main-green space-y-1">
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
-                        <a href="form.html" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
+                        <a href="form.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
                     </li>
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
                         <a href="record.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Record Experience</a>

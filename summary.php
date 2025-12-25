@@ -1,105 +1,96 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require __DIR__ . '/db.php';
 
-
-$idCol      = sessionIdColumn($conn);
-$hasPart    = tableHasColumn($conn, 'drivingSession', 'partOfDay');
-$hasIdOfDay = tableHasColumn($conn, 'drivingSession', 'idOfDay');
-$dayField   = $hasPart ? 'd.partOfDay' : ($hasIdOfDay ? 'd.idOfDay' : "''");
+$idCol       = sessionIdColumn($conn);
+$hasPart     = tableHasColumn($conn, 'drivingSession', 'partOfDay');
+$hasIdOfDay  = tableHasColumn($conn, 'drivingSession', 'idOfDay');
+$hasRoadCol  = tableHasColumn($conn, 'drivingSession', 'road_id');
+$dayField    = $hasPart ? 'd.partOfDay' : ($hasIdOfDay ? 'd.idOfDay' : "''");
 $junctionCol = tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'idSession')
     ? 'idSession'
     : (tableHasColumn($conn, 'drivingSession_roadSurfaceType', 'session_id') ? 'session_id' : null);
 
-$selectRoads = '';
-$groupRoads = '';
-if ($junctionCol) {
-    $selectRoads = ", GROUP_CONCAT(DISTINCT rst.road_id ORDER BY rst.road_id SEPARATOR ',') AS road_ids,
-                     GROUP_CONCAT(DISTINCT r.road_type ORDER BY r.road_type SEPARATOR ', ') AS road_types";
-    $groupRoads = ", rst.road_id";
-}
-
-$sqlSummary = "
-    SELECT d.{$idCol} AS id,
-           d.date,
-           d.start_time,
-           d.end_time,
-           d.mileage,
-           d.weather_id,
-           w.weather_type,
-           d.traffic_id,
-           t.traffic_type,
-           d.visibility_id,
-           v.visibility_type,
-           d.parking_id,
-           p.parking_type,
-           d.manoeuvre_id,
-           m.manoeuvre_type,
-           {$dayField} AS idOfDay
-           {$selectRoads}
-    FROM drivingSession d
-    LEFT JOIN weather w ON w.weather_id = d.weather_id
-    LEFT JOIN trafficCondition t ON t.traffic_id = d.traffic_id
-    LEFT JOIN visibilityCondition v ON v.visibility_id = d.visibility_id
-    LEFT JOIN parkingType p ON p.parking_id = d.parking_id
-    LEFT JOIN manoeuvres m ON m.manoeuvre_id = d.manoeuvre_id
-    " . ($junctionCol ? "LEFT JOIN drivingSession_roadSurfaceType rst ON rst.{$junctionCol} = d.{$idCol}
-    LEFT JOIN roadSurfaceType r ON r.road_id = rst.road_id" : '') . "
-    GROUP BY d.{$idCol}, d.date, d.start_time, d.end_time, d.mileage, d.weather_id, d.traffic_id, d.visibility_id, d.parking_id, d.manoeuvre_id, idOfDay
-    ORDER BY d.date DESC, d.start_time DESC
+$statsSql = "
+    SELECT COUNT(*) AS total_sessions,
+           COALESCE(SUM(mileage), 0) AS total_mileage,
+           COALESCE(AVG(CASE WHEN end_time > start_time THEN TIMESTAMPDIFF(MINUTE, start_time, end_time) END), 0) AS avg_duration_minutes
+    FROM drivingSession
 ";
-$resSummary = $conn->query($sqlSummary);
-$sessions = $resSummary->fetch_all(MYSQLI_ASSOC);
-$resSummary->free();
-
-function countBy(array $sessions, string $key, array $options): array
-{
-    $counts = array_fill_keys(array_keys($options), 0);
-    foreach ($sessions as $session) {
-        if (isset($counts[$session[$key]])) {
-            $counts[$session[$key]]++;
-        }
-    }
-    return $counts;
+$statsRes = $conn->query($statsSql);
+$stats = $statsRes ? $statsRes->fetch_assoc() : ['total_sessions' => 0, 'total_mileage' => 0, 'avg_duration_minutes' => 0];
+if ($statsRes) {
+    $statsRes->free();
 }
 
-$totalMileage = 0;
-$totalDurationMinutes = 0;
-$mileageByDate = [];
+$totalSessions = (int) ($stats['total_sessions'] ?? 0);
+$totalMileage = (float) ($stats['total_mileage'] ?? 0);
+$avgDurationMinutes = (int) round($stats['avg_duration_minutes'] ?? 0);
 
-foreach ($sessions as $session) {
-    $totalMileage += (float) $session['mileage'];
-    $start = strtotime($session['start_time']);
-    $end   = strtotime($session['end_time']);
-    if ($end > $start) {
-        $totalDurationMinutes += ($end - $start) / 60;
-    }
-    $dateKey = $session['date'] ?? '';
-    if ($dateKey) {
-        if (!isset($mileageByDate[$dateKey])) {
-            $mileageByDate[$dateKey] = 0;
+$weatherCounts = array_fill_keys(array_keys($weatherOptions), 0);
+$weatherRes = $conn->query("SELECT w.weather_id, COUNT(d.{$idCol}) AS total FROM weather w LEFT JOIN drivingSession d ON d.weather_id = w.weather_id GROUP BY w.weather_id, w.weather_type");
+if ($weatherRes) {
+    while ($row = $weatherRes->fetch_assoc()) {
+        $wid = (string) $row['weather_id'];
+        if (isset($weatherCounts[$wid])) {
+            $weatherCounts[$wid] = (int) $row['total'];
         }
-        $mileageByDate[$dateKey] += (float) $session['mileage'];
     }
+    $weatherRes->free();
 }
 
-$totalSessions = count($sessions);
-$avgDurationMinutes = $totalSessions ? round($totalDurationMinutes / $totalSessions) : 0;
+$trafficCounts = array_fill_keys(array_keys($trafficOptions), 0);
+$trafficRes = $conn->query("SELECT t.traffic_id, COUNT(d.{$idCol}) AS total FROM trafficCondition t LEFT JOIN drivingSession d ON d.traffic_id = t.traffic_id GROUP BY t.traffic_id, t.traffic_type");
+if ($trafficRes) {
+    while ($row = $trafficRes->fetch_assoc()) {
+        $tid = (string) $row['traffic_id'];
+        if (isset($trafficCounts[$tid])) {
+            $trafficCounts[$tid] = (int) $row['total'];
+        }
+    }
+    $trafficRes->free();
+}
 
-$weatherCounts = countBy($sessions, 'weather_id', $weatherOptions);
-$trafficCounts = countBy($sessions, 'traffic_id', $trafficOptions);
-$dayCounts     = countBy($sessions, 'idOfDay', $dayParts);
+$dayCounts = array_fill_keys(array_keys($dayParts), 0);
+$daySql = "SELECT {$dayField} AS day_key, COUNT(*) AS total FROM drivingSession d GROUP BY day_key";
+$dayRes = $conn->query($daySql);
+if ($dayRes) {
+    while ($row = $dayRes->fetch_assoc()) {
+        $key = $row['day_key'] ?? '';
+        if (isset($dayCounts[$key])) {
+            $dayCounts[$key] = (int) $row['total'];
+        }
+    }
+    $dayRes->free();
+}
 
-// roads need special handling due to GROUP_CONCAT
 $roadCounts = array_fill_keys(array_keys($roadOptions), 0);
-foreach ($sessions as $session) {
-    if (!empty($session['road_ids'])) {
-        $ids = array_filter(explode(',', $session['road_ids']), 'strlen');
-        foreach ($ids as $rid) {
-            if (isset($roadCounts[$rid])) {
-                $roadCounts[$rid]++;
-            }
+if ($hasRoadCol) {
+    $roadRes = $conn->query("SELECT road_id, COUNT(*) AS total FROM drivingSession GROUP BY road_id");
+} elseif ($junctionCol) {
+    $roadRes = $conn->query("SELECT r.road_id, COUNT(DISTINCT d.{$idCol}) AS total FROM roadSurfaceType r LEFT JOIN drivingSession_roadSurfaceType rst ON rst.road_id = r.road_id LEFT JOIN drivingSession d ON d.{$idCol} = rst.{$junctionCol} GROUP BY r.road_id");
+} else {
+    $roadRes = false;
+}
+if ($roadRes) {
+    while ($row = $roadRes->fetch_assoc()) {
+        $rid = (string) $row['road_id'];
+        if (isset($roadCounts[$rid])) {
+            $roadCounts[$rid] = (int) $row['total'];
         }
     }
+    $roadRes->free();
+}
+
+$mileageByDate = [];
+$mileageRes = $conn->query("SELECT date, SUM(mileage) AS total_mileage FROM drivingSession GROUP BY date ORDER BY date");
+if ($mileageRes) {
+    while ($row = $mileageRes->fetch_assoc()) {
+        $mileageByDate[$row['date']] = (float) $row['total_mileage'];
+    }
+    $mileageRes->free();
 }
 
 $mileageDates = array_keys($mileageByDate);
@@ -163,7 +154,7 @@ $mileageSeries = array_map(fn($d) => round($mileageByDate[$d], 2), $mileageDates
                 <!-- Desktop menu -->
                 <ul class="hidden lg:flex  xl:text-base 2xl:text-xl chivo-regular h-full text-main-green">
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
-                        <a href="form.html" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
+                        <a href="form.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Home</a>
                     </li>
                     <li class="hover:bg-hover-green h-full flex items-center transition-colors">
                         <a href="record.php" class="tracking-wider px-2 xl:px-4 2xl:px-5 h-full flex items-center whitespace-nowrap">Record</a>
@@ -181,7 +172,7 @@ $mileageSeries = array_map(fn($d) => round($mileageByDate[$d], 2), $mileageDates
             <div id="mobile-menu" class="mobile-menu lg:hidden pb-3">
                 <ul class="flex flex-col text-sm sm:text-base chivo-regular text-main-green space-y-1">
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
-                        <a href="form.html" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
+                        <a href="form.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Home</a>
                     </li>
                     <li class="hover:bg-hover-green rounded-lg transition-colors">
                         <a href="record.php" class="block tracking-wider px-3 py-2 sm:px-4 sm:py-3">Record Experience</a>
