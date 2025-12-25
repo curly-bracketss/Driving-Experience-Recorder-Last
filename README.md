@@ -1,10 +1,11 @@
-🚗 Driving Experience Recorder
+**🚗 Driving Experience Recorder**
+
 
 The Driving Experience Recorder is a web-based application designed to help users record, organize, and analyze driving sessions based on real-world conditions such as weather, traffic, road surface, visibility, parking type, manoeuvres, and time of day.
 
 This project transforms subjective driving experiences into structured, analyzable data, making it useful for learning, safety analysis, research, and academic purposes.
 
-🌟 Project Objectives
+**🌟 Project Objectives**
 
 Record detailed driving session data
 
@@ -15,8 +16,8 @@ Store data securely in a relational database
 Provide a clear and responsive user interface
 
 Enable future data analysis and summary reports
-
-🧠 Core Features
+**
+🧠 Core Features**
 
 🗓️ Session logging with date, start time, end time, and mileage
 
@@ -46,8 +47,8 @@ Part of day
 
 📊 Expandable for summaries and analytics
 
-🛠️ Tech Stack
-Frontend
+**🛠️ Tech Stack**
+**Frontend**
 
 HTML5
 
@@ -56,8 +57,8 @@ Tailwind CSS
 Vanilla JavaScript
 
 Responsive design principles
-
-Backend
+**
+Backend**
 
 PHP (Procedural + Prepared Statements)
 
@@ -73,7 +74,7 @@ AlwaysData
 
 Linux-based environment
 
-🗃️ Database Design
+**🗃️ Database Design**
 
 The database follows relational normalization principles:
 
@@ -101,7 +102,7 @@ drivingSession_roadSurfaceType (many-to-many)
 
 This structure avoids redundancy and supports scalability.
 
-📂 Project Structure
+**📂 Project Structure**
 /www
 ├── form.php
 ├── record.php
@@ -119,7 +120,7 @@ This structure avoids redundancy and supports scalability.
 │   ├── manoeuvres.jpeg
 │   └── visibility.jpeg
 
-✅ Data Validation Rules
+**✅ Data Validation Rules**
 
 All fields are required
 
@@ -130,8 +131,8 @@ Mileage must be a positive number
 All selected options must exist in the database
 
 Transactions ensure data integrity
-
-🚀 How to Run the Project
+**
+🚀 How to Run the Project**
 
 Upload the project to the /www directory on AlwaysData
 
@@ -143,9 +144,9 @@ Ensure image assets are placed in /www/assets
 
 Access the application via:
 
-https://yourusername.alwaysdata.net/form.php](https://nazrin33.alwaysdata.net/HWPlast/form.php)
-
-📈 Future Improvements
+https://nazrin33.alwaysdata.net/HWPlast/form.php
+**
+📈 Future Improvements**
 
 User authentication and profiles
 
@@ -157,7 +158,7 @@ Filtering and searching driving sessions
 
 API support for mobile applications
 
-🎓 Academic Context
+**🎓 Academic Context**
 
 This project was developed as part of a web development / backend programming course, focusing on:
 
@@ -168,8 +169,8 @@ Secure data handling
 Relational database design
 
 Real-world problem modeling
-
-👩‍💻 Author
+**
+👩‍💻 Author**
 
 Nazrin Azizli
 Computer Science Student
