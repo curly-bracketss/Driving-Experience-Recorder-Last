@@ -16,7 +16,7 @@ require_once __DIR__ . '/src/DrivingExperience.php';
 
 $DB_HOST = 'mysql-nazrin33.alwaysdata.net';
 $DB_USER = 'nazrin33';
-$DB_PASS = 'mamamia33.N';
+$DB_PASS = '******';
 $DB_NAME = 'nazrin33_hw';
 $DB_PORT = 3306;
 
